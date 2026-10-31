@@ -4,6 +4,10 @@ A Windows clipboard manager that merges live clipboard captures with the Windows
 
 Built with WPF on .NET 9. Runs in the system tray; opens as a borderless, topmost overlay.
 
+## Download
+
+Grab the latest `Clipwise.exe` from the [releases page](https://github.com/macieqzz/Clipboard/releases/latest). Framework-dependent build for win-x64 — requires the [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0).
+
 ## Features
 
 - **Live capture** — text and images are captured as they hit the clipboard.
