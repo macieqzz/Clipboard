@@ -1,0 +1,6 @@
+bin/
+obj/
+Clipwise.exe
+*.user
+.vs/
+.idea/
