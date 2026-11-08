@@ -68,7 +68,11 @@ public partial class App : Application
             if (ext != null) _tray.Icon = ext;
         }
         catch { /* keep the drawn glyph */ }
-        _tray.DoubleClick += (_, _) => Clipwise.MainWindow.Instance?.ShowOverlay();
+        _tray.MouseClick += (_, e) =>
+        {
+            if (e.Button == WinForms.MouseButtons.Left)
+                Clipwise.MainWindow.Instance?.ToggleOverlay();
+        };
 
         // Tray icons are sometimes slow to appear; ping the shell once.
         _trayTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };

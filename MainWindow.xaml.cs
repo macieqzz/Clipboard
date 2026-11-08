@@ -27,11 +27,9 @@ public partial class MainWindow : Window
     private HwndSource? _host;
     private Native.LowLevelKeyboardProc? _llHookProc;
     private IntPtr _llHook;
-    private bool _deferWinDown;   // holding a real Win-down until we know it's Win+V
-    private uint _deferredVk;
-    private uint _deferredScan;
-    private bool _intercepted;     // a Win+V was consumed; await + eat the trailing Win-up
+    private bool _swallowingV;     // a Win+V V-down was eaten; eat its repeats and V-up too
     private IntPtr _prevForeground;
+    private IntPtr _renameEdit;    // focused Explorer rename box when the overlay opened
     private bool _clipboardBusy;
     private bool _winvRefreshing;
     private DateTime _lastWinvRefresh = DateTime.MinValue;
@@ -57,7 +55,17 @@ public partial class MainWindow : Window
         _store.Load();
 
         FontFamily = (FontFamily)FindResource("AppFont");
-        FooterText.Text = "↵ Paste  ·  Del Remove  ·  P Pin  ·  Esc Close";
+        FooterText.Text = "Del Remove  ·  P Pin  ·  Esc Close";
+        if (_settings.WindowWidth >= 340) Width = _settings.WindowWidth;
+        if (_settings.WindowHeight >= 260) Height = _settings.WindowHeight;
+        SizeChanged += (_, _) =>
+        {
+            if (!IsLoaded || WindowState != WindowState.Normal) return;
+            _settings.WindowWidth = ActualWidth;
+            _settings.WindowHeight = ActualHeight;
+            _settings.Save();
+        };
+
 
         _view = (ListCollectionView)CollectionViewSource.GetDefaultView(_store.Items);
         _view.Filter = FilterItem;
@@ -181,82 +189,40 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Swallows Win+V before the shell can open its clipboard history and toggles
-    /// our overlay instead. WH_KEYBOARD_LL runs ahead of system hotkey processing.
+    /// Win+V override without ever holding back a key (same approach as Raycast /
+    /// AutoHotkey). Win events always pass through untouched, so the system's
+    /// key state can never get out of sync. Only the V press of a plain Win+V is
+    /// eaten, and a no-op "mask" key is injected so the shell does not open Start
+    /// when Win is released.
     /// </summary>
     private IntPtr LlHook(int nCode, UIntPtr wParam, IntPtr lParam)
     {
         if (nCode != 0 || !WinVOverride) return Native.CallNextHookEx(_llHook, nCode, wParam, lParam);
 
         var k = System.Runtime.InteropServices.Marshal.PtrToStructure<Native.KBDLLHOOKSTRUCT>(lParam);
-        bool isDown = wParam == Native.WM_KEYDOWN || wParam == Native.WM_SYSKEYDOWN;
-        bool isUp = wParam == Native.WM_KEYUP || wParam == Native.WM_SYSKEYUP;
-        if (Environment.GetEnvironmentVariable("CLIPWISE_HOOKLOG") == "1")
-            LogStartup($"hook vk={k.vkCode:X2} msg={wParam:X4} inj={(k.flags & Native.LLKHF_INJECTED) != 0} def={_deferWinDown} int={_intercepted}");
-
-        // Our own replayed events (tagged with the magic extra-info): pass through.
-        if (k.dwExtraInfo == Native.HOOK_EVENT_MARK) return Native.CallNextHookEx(_llHook, nCode, wParam, lParam);
-
-        bool isWinKey = k.vkCode == Native.VK_LWIN || k.vkCode == Native.VK_RWIN;
-
-        // After an intercepted Win+V, eat the trailing V-up and Win-up so the
-        // shell never learns a Win key was pressed (a swallowed Win-up alone
-        // leaves the shell believing Win is held, breaking Win+arrow combos).
-        if (_intercepted)
-        {
-            if (isWinKey && isUp || k.vkCode == Native.VK_V)
-                return new IntPtr(1);
-            _intercepted = false; // any other key ends the swallow window
-        }
-
-        if (isWinKey && isDown)
-        {
-            if (!_deferWinDown)
-            {
-                _deferWinDown = true;
-                _deferredVk = k.vkCode;
-                _deferredScan = k.scanCode;
-            }
-            return new IntPtr(1); // hold until we know the combo
-        }
-
-        if (_deferWinDown)
-        {
-            if (k.vkCode == Native.VK_V)
-            {
-                bool ctrlOrAlt =
-                    (Native.GetAsyncKeyState(0x11) & 0x8000) != 0 ||
-                    (Native.GetAsyncKeyState(0x12) & 0x8000) != 0;
-                if (!ctrlOrAlt)
-                {
-                    if (isDown) DeferOverlayOpen();
-                    _deferWinDown = false;
-                    _intercepted = true;
-                    return new IntPtr(1); // consume this V event
-                }
-            }
-
-            // Not a plain Win+V: replay the held Win-down, and for a key press
-            // re-inject the key itself right after it, so the shell sees the
-            // combo in the correct order (Win-down, then key). Swallow the real
-            // down to avoid a duplicated press; the real key-up still passes.
-            ReplayDeferredWin(); // tagged Win-down
-            _deferWinDown = false;
-            if (isWinKey && isUp) return Native.CallNextHookEx(_llHook, nCode, wParam, lParam); // tap: real up completes it
-            if (isDown)
-            {
-                Native.keybd_event((byte)k.vkCode, (byte)k.scanCode, 0, Native.HOOK_EVENT_MARK);
-                return new IntPtr(1);
-            }
+        if (k.vkCode != Native.VK_V || k.dwExtraInfo == Native.HOOK_EVENT_MARK)
             return Native.CallNextHookEx(_llHook, nCode, wParam, lParam);
+
+        bool isDown = wParam == Native.WM_KEYDOWN || wParam == Native.WM_SYSKEYDOWN;
+        if (!isDown)
+        {
+            if (!_swallowingV) return Native.CallNextHookEx(_llHook, nCode, wParam, lParam);
+            _swallowingV = false;
+            return new IntPtr(1); // V-up of an eaten Win+V
         }
 
-        return Native.CallNextHookEx(_llHook, nCode, wParam, lParam);
-    }
+        if (_swallowingV) return new IntPtr(1); // auto-repeat while held
 
-    private void ReplayDeferredWin()
-    {
-        Native.keybd_event((byte)_deferredVk, (byte)_deferredScan, 0, Native.HOOK_EVENT_MARK);
+        bool winHeld = (Native.GetAsyncKeyState(Native.VK_LWIN) & 0x8000) != 0 ||
+                       (Native.GetAsyncKeyState(Native.VK_RWIN) & 0x8000) != 0;
+        bool ctrlOrAlt = (Native.GetAsyncKeyState(0x11) & 0x8000) != 0 ||
+                         (Native.GetAsyncKeyState(0x12) & 0x8000) != 0;
+        if (!winHeld || ctrlOrAlt) return Native.CallNextHookEx(_llHook, nCode, wParam, lParam);
+
+        _swallowingV = true;
+        Native.SendMaskKey();
+        DeferOverlayOpen();
+        return new IntPtr(1);
     }
 
     /// <summary>Toggle the Win+V replacement from the tray menu.</summary>
@@ -300,7 +266,27 @@ public partial class MainWindow : Window
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        // Reserved for window-level messages (nothing needed today).
+        if (msg == Native.WM_NCHITTEST && PresentationSource.FromVisual(this) != null)
+        {
+            int x = unchecked((short)(long)lParam);
+            int y = unchecked((short)((long)lParam >> 16));
+            var pt = PointFromScreen(new System.Windows.Point(x, y));
+
+            const double border = 8.0;
+            bool left = pt.X <= border;
+            bool right = pt.X >= ActualWidth - border;
+            bool top = pt.Y <= border;
+            bool bottom = pt.Y >= ActualHeight - border;
+
+            if (top && left) { handled = true; return (IntPtr)Native.HTTOPLEFT; }
+            if (top && right) { handled = true; return (IntPtr)Native.HTTOPRIGHT; }
+            if (bottom && left) { handled = true; return (IntPtr)Native.HTBOTTOMLEFT; }
+            if (bottom && right) { handled = true; return (IntPtr)Native.HTBOTTOMRIGHT; }
+            if (left) { handled = true; return (IntPtr)Native.HTLEFT; }
+            if (right) { handled = true; return (IntPtr)Native.HTRIGHT; }
+            if (top) { handled = true; return (IntPtr)Native.HTTOP; }
+            if (bottom) { handled = true; return (IntPtr)Native.HTBOTTOM; }
+        }
         return IntPtr.Zero;
     }
 
@@ -413,6 +399,8 @@ public partial class MainWindow : Window
     public void ShowOverlay()
     {
         _prevForeground = Native.GetForegroundWindow();
+        // Renaming a file/folder? Remember the edit box so the paste can land there.
+        _renameEdit = Native.GetRenameEdit(_prevForeground);
 
         Native.GetCursorPos(out var p);
         var dpi = (double)Native.GetDpiForSystem() / 96.0;
@@ -452,7 +440,7 @@ public partial class MainWindow : Window
         _winvTimer.Start();
     }
 
-    private void ToggleOverlay()
+    public void ToggleOverlay()
     {
         if (IsVisible) HideOverlay();
         else ShowOverlay();
@@ -493,18 +481,44 @@ public partial class MainWindow : Window
         if (!ok) return;
 
         await Task.Delay(60);
+
+        // Explorer's in-place rename: the overlay took the focus, so hand it back
+        // to the name box, replace the whole name with the clip and confirm.
+        if (_renameEdit != IntPtr.Zero && clip.Kind == ClipKind.Text)
+        {
+            if (Native.FocusChildWindow(_renameEdit))
+            {
+                await Task.Delay(60);
+                Native.SendCtrlA();
+                Native.SendCtrlV();
+                await Task.Delay(120);
+                Native.SendEnter();
+                return;
+            }
+        }
+
         Native.SendCtrlV();
     }
 
     private void RemoveSelected()
     {
         if (ClipList.SelectedItem is not ClipItem clip) return;
+        int idx = ClipList.SelectedIndex;
         _store.Remove(clip);
         if (clip.FromWinV && clip.HistoryId != null)
             _ = WinVService.DeleteAsync(clip);
         _saveTimer.Stop();
         _saveTimer.Start();
         UpdateCounts();
+
+        // The next item slides into the removed slot; keep the cursor there
+        // (or on the new last item) and keep typing focus in the search box.
+        if (_view is { IsEmpty: false })
+        {
+            ClipList.SelectedIndex = Math.Min(idx, _view.Count - 1);
+            ClipList.ScrollIntoView(ClipList.SelectedItem);
+        }
+        SearchBox.Focus();
     }
 
     private void TogglePinSelected()
@@ -533,15 +547,25 @@ public partial class MainWindow : Window
 
     private void UpdateStatus()
     {
-        if (!WinVService.IsSupported)
+        if (!HotkeyOk)
         {
-            StatusText.Text = "Win+V: unavailable — " + (WinVService.LastError ?? "unknown");
+            FooterText.Text = "Hotkey registration failed (Ctrl+` and Ctrl+Shift+` taken)";
+            StatusText.Text = "";
             return;
         }
-        StatusText.Text = $"Win+V history: {WinVService.LastItemCount} items";
-        if (WinVOverride) StatusText.Text += " · Win+V redirected";
-        if (HotkeyOk) FooterText.Text = $"↵ Paste  ·  Del Remove  ·  P Pin  ·  Esc Close  ·  {HotkeyLabel} / Win+V open";
-        else FooterText.Text = "hotkey registration failed (Ctrl+` and Ctrl+Shift+` both taken)";
+
+        FooterText.Text = "Del Remove  ·  P Pin  ·  Esc Close";
+
+        if (!WinVService.IsSupported && !string.IsNullOrEmpty(WinVService.LastError))
+        {
+            StatusText.Text = "Win+V off";
+            StatusText.ToolTip = WinVService.LastError;
+        }
+        else
+        {
+            StatusText.Text = "";
+            StatusText.ToolTip = null;
+        }
     }
 
     // ---------- events ----------
@@ -572,11 +596,17 @@ public partial class MainWindow : Window
     private void Window_OnPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         // Click outside the list (e.g. on the surface) also closes, like Win+V.
-        if (e.OriginalSource is DependencyObject dep &&
-            ItemsControl.ContainerFromElement(ClipList, dep) == null &&
-            dep is not System.Windows.Controls.Primitives.ScrollBar)
+        if (e.OriginalSource is DependencyObject dep)
         {
-            HideOverlay();
+            if (dep is Visual v && (SearchBox.IsAncestorOf(v) || v == SearchBox))
+                return;
+            // Clicks land on the Thumb/Track/RepeatButton parts, not the ScrollBar itself.
+            for (var p = dep; p is Visual; p = VisualTreeHelper.GetParent(p))
+                if (p is System.Windows.Controls.Primitives.ScrollBar) return;
+            if (ItemsControl.ContainerFromElement(ClipList, dep) == null)
+            {
+                HideOverlay();
+            }
         }
     }
 

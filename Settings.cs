@@ -12,6 +12,10 @@ public class Settings
     /// <summary>When true, Win+V opens Clipwise instead of the Windows clipboard history.</summary>
     public bool WinVOverride { get; set; } = true;
 
+    /// <summary>Remembered window dimensions.</summary>
+    public double WindowWidth { get; set; } = 480;
+    public double WindowHeight { get; set; } = 620;
+
     public void Save()
     {
         try

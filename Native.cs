@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Clipwise;
 
@@ -13,6 +14,17 @@ internal static class Native
 
     public const long WS_EX_TOOLWINDOW = 0x00000080;
     public const long WS_EX_NOACTIVATE = 0x08000000;
+
+    public const int WM_NCHITTEST = 0x0084;
+    public const int HTCLIENT = 1;
+    public const int HTLEFT = 10;
+    public const int HTRIGHT = 11;
+    public const int HTTOP = 12;
+    public const int HTTOPLEFT = 13;
+    public const int HTTOPRIGHT = 14;
+    public const int HTBOTTOM = 15;
+    public const int HTBOTTOMLEFT = 16;
+    public const int HTBOTTOMRIGHT = 17;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT
@@ -81,7 +93,104 @@ internal static class Native
     public static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    public static extern IntPtr SetFocus(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+
+    [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GUITHREADINFO
+    {
+        public int cbSize;
+        public int flags;
+        public IntPtr hwndActive;
+        public IntPtr hwndFocus;
+        public IntPtr hwndCapture;
+        public IntPtr hwndMenuOwner;
+        public IntPtr hwndMoveSize;
+        public IntPtr hwndCaret;
+        public RECT rcCaret;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
+
+    private const uint GA_ROOT = 2;
+
+    private static string ClassNameOf(IntPtr hWnd)
+    {
+        var sb = new StringBuilder(256);
+        return GetClassName(hWnd, sb, sb.Capacity) > 0 ? sb.ToString() : "";
+    }
+
+    private static bool IsExplorer(uint pid)
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            return p.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The HWND of the edit box the user is renaming a file/folder in (Explorer's
+    /// in-place rename), or IntPtr.Zero when the foreground window is something else.
+    /// </summary>
+    public static IntPtr GetRenameEdit(IntPtr foreground)
+    {
+        try
+        {
+            if (foreground == IntPtr.Zero) return IntPtr.Zero;
+            uint tid = GetWindowThreadProcessId(foreground, out uint pid);
+            if (tid == 0) return IntPtr.Zero;
+
+            var info = new GUITHREADINFO { cbSize = Marshal.SizeOf<GUITHREADINFO>() };
+            if (!GetGUIThreadInfo(tid, ref info) || info.hwndFocus == IntPtr.Zero) return IntPtr.Zero;
+
+            var focus = info.hwndFocus;
+            if (!ClassNameOf(focus).Equals("Edit", StringComparison.OrdinalIgnoreCase)) return IntPtr.Zero;
+            return IsExplorer(pid) ? focus : IntPtr.Zero;
+        }
+        catch
+        {
+            return IntPtr.Zero;
+        }
+    }
+
+    /// <summary>Give keyboard focus back to a control in another process (the
+    /// Explorer rename box after our overlay closed and took it).</summary>
+    public static bool FocusChildWindow(IntPtr hWnd)
+    {
+        IntPtr root = GetAncestor(hWnd, GA_ROOT);
+        if (root != IntPtr.Zero) RestoreForeground(root);
+
+        uint cur = GetCurrentThreadId();
+        GetWindowThreadProcessId(hWnd, out uint target);
+        if (target == 0 || target == cur) return SetFocus(hWnd) != IntPtr.Zero;
+
+        AttachThreadInput(target, cur, true);
+        try { return SetFocus(hWnd) != IntPtr.Zero; }
+        finally { AttachThreadInput(target, cur, false); }
+    }
 
     [DllImport("user32.dll")]
     public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -152,6 +261,8 @@ internal static class Native
 
     public const byte VK_CONTROL = 0x11;
     public const byte VK_V = 0x56;
+    public const byte VK_A = 0x41;
+    public const byte VK_RETURN = 0x0D;
     public const uint KEYEVENTF_KEYUP = 0x0002;
 
     [DllImport("user32.dll")]
@@ -164,6 +275,14 @@ internal static class Native
         keybd_event(vk, scan, KEYEVENTF_KEYUP, UIntPtr.Zero);
     }
 
+    /// <summary>VK 0xE8 is unassigned: tapping it while Win is held makes the shell
+    /// treat Win as "used in a combo", so releasing Win does not open Start.</summary>
+    public static void SendMaskKey()
+    {
+        keybd_event(0xE8, 0, 0, HOOK_EVENT_MARK);
+        keybd_event(0xE8, 0, KEYEVENTF_KEYUP, HOOK_EVENT_MARK);
+    }
+
     /// <summary>Ctrl+V via keybd_event. Empirically the injection route that reaches
     /// target apps from a background session; SendInput is dropped in some
     /// remote/automation sessions.</summary>
@@ -174,4 +293,15 @@ internal static class Native
         keybd_event(VK_V, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
         keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
     }
+
+    /// <summary>Ctrl+A via keybd_event (select all in the target edit).</summary>
+    public static void SendCtrlA()
+    {
+        keybd_event(VK_CONTROL, 0, 0, UIntPtr.Zero);
+        keybd_event(VK_A, 0, 0, UIntPtr.Zero);
+        keybd_event(VK_A, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+        keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    }
+
+    public static void SendEnter() => KeyTap(VK_RETURN, 0x1C);
 }

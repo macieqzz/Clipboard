@@ -1,9 +1,9 @@
 ﻿<Window x:Class="Clipwise.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Clipwise" Width="560" Height="620"
+        Title="Clipwise" Width="480" Height="620" MinWidth="340" MinHeight="260"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
-        ResizeMode="NoResize" ShowInTaskbar="False" Topmost="True"
+        ResizeMode="CanResize" ShowInTaskbar="False" Topmost="True"
         SnapsToDevicePixels="True"
         PreviewMouseDown="Window_OnPreviewMouseDown"
         PreviewKeyDown="Window_OnPreviewKeyDown"
@@ -28,13 +28,23 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <Grid>
-                        <TextBox x:Name="SearchBox" Style="{StaticResource SearchTextBox}"
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="12" Foreground="{StaticResource TextSecondary}"
+                                   VerticalAlignment="Center" Margin="0,1,10,0"
+                                   IsHitTestVisible="False"/>
+                        <TextBox x:Name="SearchBox" Grid.Column="1" Style="{StaticResource SearchTextBox}"
                                  VerticalAlignment="Center"
                                  TextChanged="SearchBox_OnTextChanged"/>
-                        <StackPanel Orientation="Horizontal" IsHitTestVisible="False"
-                                    VerticalAlignment="Center">
-                            <StackPanel.Style>
-                                <Style TargetType="StackPanel">
+                        <TextBlock Grid.Column="1" Text="Search clipboard" IsHitTestVisible="False"
+                                   VerticalAlignment="Center" Margin="2,0,0,0"
+                                   FontFamily="{StaticResource AppFont}"
+                                   FontSize="13" Foreground="{StaticResource TextSecondary}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed"/>
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
@@ -42,13 +52,8 @@
                                         </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
-                            </StackPanel.Style>
-                            <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets"
-                                       FontSize="12" Foreground="{StaticResource TextSecondary}"
-                                       Margin="0,0,8,0"/>
-                            <TextBlock Text="Search clipboard" FontFamily="{StaticResource AppFont}"
-                                       FontSize="13" Foreground="{StaticResource TextSecondary}"/>
-                        </StackPanel>
+                            </TextBlock.Style>
+                        </TextBlock>
                     </Grid>
                     <TextBlock x:Name="CountChip" Grid.Column="1" VerticalAlignment="Center"
                                FontFamily="{StaticResource AppFont}" FontSize="11"
@@ -74,7 +79,8 @@
                            VerticalAlignment="Center"/>
                 <TextBlock x:Name="StatusText" Grid.Column="1"
                            FontFamily="{StaticResource AppFont}" FontSize="11"
-                           Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                           Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"
+                           Margin="10,0,0,0"/>
             </Grid>
         </Grid>
     </Border>
