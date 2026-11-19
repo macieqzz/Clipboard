@@ -263,6 +263,18 @@ internal static class Native
     public const byte VK_V = 0x56;
     public const byte VK_A = 0x41;
     public const byte VK_RETURN = 0x0D;
+    public const byte VK_F2 = 0x71;
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindow(IntPtr hWnd);
+
+    /// <summary>True when the window belongs to an explorer.exe process.</summary>
+    public static bool IsExplorerProcess(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return false;
+        GetWindowThreadProcessId(hWnd, out uint pid);
+        return pid != 0 && IsExplorer(pid);
+    }
     public const uint KEYEVENTF_KEYUP = 0x0002;
 
     [DllImport("user32.dll")]
@@ -304,4 +316,7 @@ internal static class Native
     }
 
     public static void SendEnter() => KeyTap(VK_RETURN, 0x1C);
+
+    /// <summary>F2 (start in-place rename in Explorer).</summary>
+    public static void SendF2() => KeyTap(VK_F2, 0x3C);
 }

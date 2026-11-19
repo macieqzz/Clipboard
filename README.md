@@ -2,6 +2,8 @@
 
 A Windows clipboard manager that merges live clipboard captures with the Windows clipboard history (Win+V) into one searchable, pinnable list.
 
+![Clipwise overlay](docs/clipwise.png)
+
 Built with WPF on .NET 9. Runs in the system tray; opens as a borderless, topmost overlay.
 
 ## Download
@@ -14,19 +16,25 @@ Grab the latest `Clipwise.exe` from the [releases page](https://github.com/macie
 - **Win+V integration** — items from the Windows clipboard history appear alongside live captures; restore and delete operate on the history API when supported.
 - **Win+V override** — optionally redirects the Win+V shortcut to open Clipwise instead of the Windows history (on by default; toggle in `%APPDATA%\Clipwise\settings.json`).
 - **Search** — type to filter as you type.
-- **Pin** — pinned items stick to the top and persist across restarts (including image bytes).
+- **Pin** — click the pin icon on any row (or press `P`); pinned entries jump to the top and persist across restarts, including image bytes.
+- **Paste into rename** — while renaming a file in Explorer, pick a text clip from Clipwise and it fills the filename (the extension is kept).
+- **Click away to dismiss** — clicking the desktop or any other window closes the overlay.
+- **Clear history** — the tray menu removes every unpinned entry (and its Win+V history item); pinned entries are never touched.
+- **Start with Windows** — tray toggle, stored as an `HKCU\...\Run` entry.
 - **Global hotkey** — `Ctrl+`` opens the overlay; falls back to `Ctrl+Shift+`` if the first binding is taken.
 
 ## Usage
 
-| Key | Action |
+| Key / action | Effect |
 |-----|--------|
 | Enter | Paste selected item |
 | Del  | Remove selected item |
 | P    | Pin / unpin selected item |
+| Click pin icon | Pin / unpin that row |
 | Esc  | Close overlay |
+| Click outside | Close overlay |
 
-Open the overlay with `Ctrl+`` (or Win+V when the override is on). The window keeps its history fresh while idle.
+Open the overlay with `Ctrl+`` (or Win+V when the override is on). The window keeps its history fresh while idle. Right-click the tray icon for **Start with Windows** and **Clear history (except pinned)**.
 
 ## Requirements
 

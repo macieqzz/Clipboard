@@ -145,21 +145,33 @@ public static class WinVService
         }
     }
 
-    public static async Task<bool> DeleteAsync(ClipItem clip)
+    public static async Task<bool> DeleteAsync(ClipItem clip) =>
+        await DeleteManyAsync(new[] { clip }) > 0;
+
+    /// <summary>Delete several items from the Windows history in one pass.</summary>
+    public static async Task<int> DeleteManyAsync(IEnumerable<ClipItem> clips)
     {
         try
         {
-            if (clip.HistoryId == null || !IsSupported) return false;
+            if (!IsSupported) return 0;
+            var ids = clips
+                .Where(c => c.HistoryId != null)
+                .Select(c => c.HistoryId!)
+                .ToHashSet();
+            if (ids.Count == 0) return 0;
+
             var result = await Clipboard.GetHistoryItemsAsync();
-            if (result.Status != ClipboardHistoryItemsResultStatus.Success) return false;
+            if (result.Status != ClipboardHistoryItemsResultStatus.Success) return 0;
+
+            int deleted = 0;
             foreach (var item in result.Items)
-                if (item.Id == clip.HistoryId)
-                    return Clipboard.DeleteItemFromHistory(item);
-            return false;
+                if (ids.Contains(item.Id) && Clipboard.DeleteItemFromHistory(item))
+                    deleted++;
+            return deleted;
         }
         catch
         {
-            return false;
+            return 0;
         }
     }
 

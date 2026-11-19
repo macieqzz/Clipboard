@@ -51,6 +51,39 @@ public partial class App : Application
         };
         winVItem.CheckedChanged += (_, _) => Clipwise.MainWindow.Instance?.SetWinVOverride(winVItem.Checked);
         menu.Items.Add(winVItem);
+
+        bool syncingStartup = false;
+        var startupItem = new WinForms.ToolStripMenuItem
+        {
+            Text = "Start with Windows",
+            CheckOnClick = true,
+            Checked = Clipwise.MainWindow.Instance?.StartWithWindows ?? false,
+        };
+        startupItem.CheckedChanged += (_, _) =>
+        {
+            if (syncingStartup) return;
+            var w = Clipwise.MainWindow.Instance;
+            if (w == null) return;
+            if (w.SetStartWithWindows(startupItem.Checked)) return;
+            // The registry refused the write: restore the real state quietly.
+            syncingStartup = true;
+            startupItem.Checked = w.StartWithWindows;
+            syncingStartup = false;
+        };
+        menu.Items.Add(startupItem);
+
+        menu.Items.Add("Clear history (except pinned)", null, (_, _) =>
+        {
+            var w = Clipwise.MainWindow.Instance;
+            if (w == null) return;
+            if (WinForms.MessageBox.Show(
+                    "Remove all unpinned clips? Pinned entries are kept.",
+                    "Clipwise", WinForms.MessageBoxButtons.OKCancel,
+                    WinForms.MessageBoxIcon.Question) != WinForms.DialogResult.OK)
+                return;
+            w.ClearHistory();
+        });
+
         menu.Items.Add(new WinForms.ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => Shutdown());
 

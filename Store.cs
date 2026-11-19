@@ -190,7 +190,21 @@ public class Store
     public void TogglePin(ClipItem item)
     {
         item.IsPinned = !item.IsPinned;
+        // Keep the visual order honest immediately: pinned rows jump to the top,
+        // unpinned ones fall back to their position by timestamp.
+        Items.Remove(item);
+        InsertSorted(item);
         Save();
+    }
+
+    /// <summary>Drop every unpinned clip (pinned rows survive) and return what
+    /// was removed so the caller can delete the matching Win+V history entries.</summary>
+    public List<ClipItem> ClearUnpinned()
+    {
+        var removed = Items.Where(i => !i.IsPinned).ToList();
+        foreach (var item in removed) Items.Remove(item);
+        Save();
+        return removed;
     }
 
     public void Remove(ClipItem item) => Items.Remove(item);

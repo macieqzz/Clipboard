@@ -12,6 +12,9 @@ public class Settings
     /// <summary>When true, Win+V opens Clipwise instead of the Windows clipboard history.</summary>
     public bool WinVOverride { get; set; } = true;
 
+    /// <summary>Keep the HKCU Run entry pointing at this exe while enabled.</summary>
+    public bool StartWithWindows { get; set; }
+
     /// <summary>Remembered window dimensions.</summary>
     public double WindowWidth { get; set; } = 480;
     public double WindowHeight { get; set; } = 620;

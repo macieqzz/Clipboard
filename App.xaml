@@ -134,20 +134,34 @@
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="10,0,0,0">
-                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE718;" FontSize="11"
-                               Foreground="{StaticResource AccentBrush}" Margin="0,0,8,0"
-                               VerticalAlignment="Center">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Visibility" Value="Collapsed"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsPinned}" Value="True">
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
+                    <Button Width="24" Height="24" Margin="0,0,4,0"
+                            VerticalAlignment="Center" Focusable="False" Background="Transparent"
+                            BorderThickness="0" Cursor="Hand" ToolTip="Pin / unpin (P)">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="PinBg" CornerRadius="4" Background="Transparent">
+                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="PinBg" Property="Background" Value="#1FFFFFFF"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE718;" FontSize="12">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsPinned}" Value="True">
+                                            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Button>
                     <TextBlock Text="{Binding TimestampLabel}" FontFamily="{StaticResource AppFont}"
                                FontSize="11" Foreground="{StaticResource TextSecondary}"
                                VerticalAlignment="Center"/>

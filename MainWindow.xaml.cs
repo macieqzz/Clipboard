@@ -30,6 +30,8 @@ public partial class MainWindow : Window
     private bool _swallowingV;     // a Win+V V-down was eaten; eat its repeats and V-up too
     private IntPtr _prevForeground;
     private IntPtr _renameEdit;    // focused Explorer rename box when the overlay opened
+    private bool _renameTarget;    // the overlay was opened while renaming a file/folder
+    private DateTime _shownAt = DateTime.MinValue;
     private bool _clipboardBusy;
     private bool _winvRefreshing;
     private DateTime _lastWinvRefresh = DateTime.MinValue;
@@ -46,6 +48,9 @@ public partial class MainWindow : Window
 
     /// <summary>When true, Win+V opens this app instead of the Windows clipboard history.</summary>
     public bool WinVOverride { get; private set; }
+
+    /// <summary>True when the HKCU Run entry exists (menu check state).</summary>
+    public bool StartWithWindows { get; private set; } = Startup.IsEnabled;
 
     public MainWindow()
     {
@@ -70,6 +75,9 @@ public partial class MainWindow : Window
         _view = (ListCollectionView)CollectionViewSource.GetDefaultView(_store.Items);
         _view.Filter = FilterItem;
         ClipList.ItemsSource = _view;
+        // The row template lives in App.xaml, so its pin button is wired here.
+        ClipList.AddHandler(System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
+            new RoutedEventHandler(PinButton_OnClick));
 
         _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); _store.Save(); };
@@ -88,6 +96,19 @@ public partial class MainWindow : Window
         });
 
         WinVOverride = _settings.WinVOverride;
+        // Keep the Run entry pointing at this exe after an update or move.
+        if (_settings.StartWithWindows) Startup.Set(true);
+        StartWithWindows = Startup.IsEnabled;
+
+        // Clicking any other window (the desktop included) takes activation away;
+        // an overlay should dismiss like the system Win+V panel does. Ignore the
+        // activation churn that can happen right after we open.
+        Deactivated += (_, _) =>
+        {
+            if (!IsVisible) return;
+            if ((DateTime.UtcNow - _shownAt).TotalMilliseconds < 250) return;
+            HideOverlay();
+        };
 
         // A crashed previous session could have left a synthetic ALT stuck down
         // (system-wide). Clear it so arrow keys behave from the start.
@@ -239,6 +260,16 @@ public partial class MainWindow : Window
             _llHook = IntPtr.Zero;
         }
         UpdateStatus();
+    }
+
+    /// <summary>Toggle the HKCU Run entry from the tray menu.</summary>
+    public bool SetStartWithWindows(bool on)
+    {
+        if (!Startup.Set(on)) return false;
+        StartWithWindows = on;
+        _settings.StartWithWindows = on;
+        _settings.Save();
+        return true;
     }
 
     private IntPtr Hook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -401,6 +432,8 @@ public partial class MainWindow : Window
         _prevForeground = Native.GetForegroundWindow();
         // Renaming a file/folder? Remember the edit box so the paste can land there.
         _renameEdit = Native.GetRenameEdit(_prevForeground);
+        _renameTarget = _renameEdit != IntPtr.Zero;
+        _shownAt = DateTime.UtcNow;
 
         Native.GetCursorPos(out var p);
         var dpi = (double)Native.GetDpiForSystem() / 96.0;
@@ -484,20 +517,70 @@ public partial class MainWindow : Window
 
         // Explorer's in-place rename: the overlay took the focus, so hand it back
         // to the name box, replace the whole name with the clip and confirm.
-        if (_renameEdit != IntPtr.Zero && clip.Kind == ClipKind.Text)
-        {
-            if (Native.FocusChildWindow(_renameEdit))
-            {
-                await Task.Delay(60);
-                Native.SendCtrlA();
-                Native.SendCtrlV();
-                await Task.Delay(120);
-                Native.SendEnter();
-                return;
-            }
-        }
+        if (clip.Kind == ClipKind.Text && await TryPasteIntoRenameAsync())
+            return;
 
         Native.SendCtrlV();
+    }
+
+    /// <summary>
+    /// Put the picked text into Explorer's in-place rename box. Activating the
+    /// overlay usually makes Explorer cancel that edit, so when the original box
+    /// is gone the rename is reopened with F2 on the still-selected item.
+    /// </summary>
+    private async Task<bool> TryPasteIntoRenameAsync()
+    {
+        if (!_renameTarget || _prevForeground == IntPtr.Zero) return false;
+
+        // Explorer's rename box preselects the base name (extension excluded),
+        // and Win+V inserts over that selection. Do the same so the extension
+        // survives and Explorer never asks about changing the file type.
+        if (_renameEdit != IntPtr.Zero && Native.IsWindow(_renameEdit) &&
+            Native.FocusChildWindow(_renameEdit))
+        {
+            await Task.Delay(60);
+            Native.SendCtrlV();
+            await Task.Delay(120);
+            Native.SendEnter();
+            return true;
+        }
+
+        // Activating the overlay made Explorer cancel the edit. Reopen it with
+        // F2 on the item Explorer still has selected, then paste.
+        if (!Native.RestoreForeground(_prevForeground)) return false;
+        await Task.Delay(120);
+        if (Native.GetForegroundWindow() != _prevForeground ||
+            !Native.IsExplorerProcess(_prevForeground))
+            return false;
+
+        Native.SendF2();
+        await Task.Delay(180);
+        var edit = Native.GetRenameEdit(_prevForeground);
+        if (edit != IntPtr.Zero) Native.FocusChildWindow(edit);
+        await Task.Delay(60);
+        Native.SendCtrlV();
+        await Task.Delay(150);
+        Native.SendEnter();
+        return true;
+    }
+
+    /// <summary>Drop all unpinned clips (and their Windows history entries).
+    /// Pinned rows are never touched.</summary>
+    public void ClearHistory()
+    {
+        var removed = _store.ClearUnpinned();
+        _view?.Refresh();
+        UpdateCounts();
+
+        var history = removed.Where(c => c.FromWinV && c.HistoryId != null).ToList();
+        if (history.Count > 0)
+            _ = WinVService.DeleteManyAsync(history);
+
+        if (_view is { IsEmpty: false })
+        {
+            ClipList.SelectedIndex = 0;
+            ClipList.ScrollIntoView(ClipList.SelectedItem);
+        }
     }
 
     private void RemoveSelected()
@@ -523,9 +606,35 @@ public partial class MainWindow : Window
 
     private void TogglePinSelected()
     {
-        if (ClipList.SelectedItem is not ClipItem clip) return;
+        if (ClipList.SelectedItem is ClipItem clip) TogglePin(clip);
+    }
+
+    private void TogglePin(ClipItem clip)
+    {
         _store.TogglePin(clip);
+        // The row may have moved to/from the pinned block; follow it.
+        ClipList.SelectedItem = clip;
+        ClipList.ScrollIntoView(clip);
         UpdateCounts();
+    }
+
+    private void PinButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        // Handlers added on the ListBox see the ListBox as sender, so resolve the
+        // button (and its row's item) from the visual tree.
+        if (e.OriginalSource is DependencyObject src)
+        {
+            for (var p = src; p is Visual; p = VisualTreeHelper.GetParent(p))
+            {
+                if (p is System.Windows.Controls.Button { DataContext: ClipItem clip })
+                {
+                    TogglePin(clip);
+                    SearchBox.Focus();
+                    return;
+                }
+            }
+        }
     }
 
     private void MoveSelection(int delta)
@@ -582,6 +691,9 @@ public partial class MainWindow : Window
     {
         if (e.ChangedButton != MouseButton.Left) return;
         if (e.OriginalSource is not DependencyObject dep) return;
+        // The inline pin button handles its own click; don't also paste the row.
+        for (var p = dep; p is Visual; p = VisualTreeHelper.GetParent(p))
+            if (p is System.Windows.Controls.Button) return;
         var item = ItemsControl.ContainerFromElement(ClipList, dep) as ListBoxItem;
         if (item?.DataContext is ClipItem clip)
             _ = PasteAsync(clip);
